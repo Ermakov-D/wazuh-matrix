@@ -1,19 +1,86 @@
 #!/usr/bin/env python3
 
-import sys
+import configparser
+import asyncio
+from nio import AsyncClient
 import json
+import sys
 import os
 
+async def send_message (server,user_id,access_token,room_id,message,proxy=None):
+    client = AsyncClient(server,user_id,proxy=proxy)
+    client.access_token = access_token
+    client.user_id = user_id
 
-# Read configuration parameters
+    try:
+        if not await client.sync(timeout=3000):
+            print ("Проблемы с подключением к серверу")
+            return
+
+        print (f"Connect as {user_id}")
+
+        response = await client.join (room_id)
+        if not response.room_id:
+            print (f"Не смог войти в комнату {room_id}")
+            return
+        await client.room_send (room_id=room_id,message_type="m.room.message",
+                                content={
+                                    "msgtype": "m.text",
+                                    "body": message
+                                    }
+                               )
+    except Exception as e:
+        print (f"Что-то пошло не так: {e}")
+
+    finally:
+        await client.close()
+############################################################################
+
+def read_config (config_file):
+    if not os.path.isfile(config_file):
+        print(f"Error: Configuration file '{config_file}' not found.")
+        exit(1)
+
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    return {
+            "server_url": config.get("matrix","server_url", fallback=None),
+            "user_id": config.get("matrix","user_id",fallback=None),
+            "access_token": config.get("matrix","access_token",fallback=None),
+            "room_id": config.get("matrix", "room_id", fallback=None),
+            "proxy": config.get("matrix", "proxy", fallback=None)
+           }
+############################################################################
+
 alert_file = open(sys.argv[1])
-#hook_url = sys.argv[3]
-hook_url = "https://NULL/"
-
-
-# Read the alert file
 alert_json = json.loads(alert_file.read())
 alert_file.close()
+
+#parser = argparse.ArgumentParser(description="Send a notification to a Matrix room.")
+#parser.add_argument("--server", help="Matrix server URL (e.g., https://matrix.example.com)")
+#parser.add_argument("--user", help="Matrix user ID (e.g., @your_username:example.com)")
+#parser.add_argument("--token", help="Matrix access token")
+#parser.add_argument("--room",  help="Matrix room ID (e.g., !room_id:example.com)")
+#parser.add_argument("--proxy",help="http proxy (e.g., http://proxy.example.com:8080)")
+#parser.add_argument("--message", help="Message to send")
+#parser.add_argument("--config",default="custom-matrix.ini",help="Path to configuration file (default: custom-matrix.ini)")
+
+#args = parser.parse_args()
+config = read_config("custom-matrix.ini")
+
+# Извлечение аргументов из парсера
+#MATRIX_SERVER_URL = args.server or config.get("server_url")
+#MATRIX_USER_ID = args.user or config.get("user_id")
+#MATRIX_ACCESS_TOKEN = args.token or config.get("access_token")
+#MATRIX_ROOM_ID = args.room or config.get("room_id")
+#PROXY=args.proxy or config.get("proxy")
+#MESSAGE = args.message
+MATRIX_SERVER_URL = config.get("server_url")
+MATRIX_USER_ID = config.get("user_id")
+MATRIX_ACCESS_TOKEN = config.get("access_token")
+MATRIX_ROOM_ID = config.get("room_id")
+PROXY=config.get("proxy")
+
 
 # Extract data fields
 alert_level = alert_json['rule']['level'] if 'level' in alert_json['rule'] else "N/A"
@@ -36,7 +103,6 @@ if rule_id in ["100010", "60115"]:
               f"*Описание:* Блокировка уч. записи пользователя\n" \
               f"*Уровень:* {alert_level}\n" \
               f"*Агент:* {agent} ({agent_ip})\n" \
-              #f"*IP-адрес агента:* {agent_ip}\n" \
               f"*Домен*: {domain}\n"\
               f"*Домен Контроллер:*: {src_dc}\n"\
               f"*Имя пользователя*: **{username}**\n"\
@@ -49,7 +115,6 @@ elif rule_id in ["5760"]:
               f"*Описание:* {description}\n" \
               f"*Уровень:* {alert_level}\n" \
               f"*Агент:* {agent} ({agent_ip})\n" \
-              #f"*IP-адрес агента:* {agent_ip}\n" \
               f"*IP-источника:* {src_ip}\n"\
               f"*Время*: {timestrap}\n"
 elif rule_id in ["100011","60122"]:
@@ -72,20 +137,18 @@ else:
               f"*Описание:* {description}\n" \
               f"*Уровень:* {alert_level}\n" \
               f"*Агент:* {agent} ({agent_ip})\n" \
-              #f"*IP-адрес агента:* {agent_ip}\n" \
               f"*ID паравила:* {rule_id}\n"\
               f"*Время*: {timestrap}\n"
 message=message+"\n---\n"
-cmd = r'export https_proxy="http://192.168.250.144:3128";/usr/local/bin/matrix-commander-rs --credentials /var/ossec/etc/matrix-commander-rs/credentials.json --store /var/ossec/etc/matrix-commander-rs/store/ --markdown --message "'+message+'"'
-## Debug
-#print (cmd)
-#try:
-#  with open("/tmp/send", "a") as f:
-#     f.write(cmd)
-#except Exception as e:
-#    print("There was an error: ", e)
-
-os.system(cmd)
 
 
-sys.exit(0)
+# Запускаем асинхронную функцию
+asyncio.run(send_message(
+        MATRIX_SERVER_URL,
+        MATRIX_USER_ID,
+        MATRIX_ACCESS_TOKEN,
+        MATRIX_ROOM_ID,
+        message,
+        proxy=PROXY
+))
+
